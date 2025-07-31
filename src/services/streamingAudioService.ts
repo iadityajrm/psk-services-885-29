@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { TranscriptionResult } from '../types/voice-tokens';
 
-const GEMINI_API_KEY = 'AIzaSyBOss0EVWeo49x_RKGOcgHGRILnhtZqR4o';
+const GEMINI_API_KEY = 'AIzaSyDC1k_PYaCIy987c-OSfFIu6D5WPFrPa9U';
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
