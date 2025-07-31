@@ -1,6 +1,6 @@
 
 export interface VoiceToken {
-  type: 'openpage' | 'openapp' | 'service_request' | 'timer' | 'environment_control' | 'none';
+  type: 'open_app' | 'timer' | 'environment_control' | 'service_request' | 'none';
   payload: {
     page?: string;
     app?: string;

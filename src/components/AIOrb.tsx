@@ -18,10 +18,32 @@ const AIOrb: React.FC<AIOrbProps> = ({ focused = false, onClick }) => {
   const processVoiceToken = (transcriptionResult: TranscriptionResult): VoiceToken => {
     const { task } = transcriptionResult;
     
+    // Map the task type to the correct VoiceToken type
+    let tokenType: VoiceToken['type'] = 'none';
+    
+    switch (task.type) {
+      case 'openpage':
+      case 'openapp':
+      case 'open_app':
+        tokenType = 'open_app';
+        break;
+      case 'timer':
+        tokenType = 'timer';
+        break;
+      case 'environment_control':
+        tokenType = 'environment_control';
+        break;
+      case 'service_request':
+        tokenType = 'service_request';
+        break;
+      default:
+        tokenType = 'none';
+    }
+    
     return {
-      type: task.type as VoiceToken['type'],
+      type: tokenType,
       payload: task.payload || {},
-      message: `Processing ${task.type} command`
+      message: `Processing ${tokenType} command`
     };
   };
 
