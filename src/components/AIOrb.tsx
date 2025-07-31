@@ -1,11 +1,10 @@
 
 import React, { useState } from 'react';
-import { Mic, MicOff } from 'lucide-react';
+import { Mic } from 'lucide-react';
 import { useStreamingVoiceRecording } from '@/hooks/useStreamingVoiceRecording';
-import { processVoiceToken } from '@/services/geminiVoiceService';
 import { useTokenProcessor } from '@/services/tokenProcessor';
 import { toast } from 'sonner';
-import type { TranscriptionResult } from '@/types/voice-tokens';
+import type { TranscriptionResult, VoiceToken } from '@/types/voice-tokens';
 
 interface AIOrbProps {
   focused?: boolean;
@@ -15,6 +14,16 @@ interface AIOrbProps {
 const AIOrb: React.FC<AIOrbProps> = ({ focused = false, onClick }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const { processToken } = useTokenProcessor();
+
+  const processVoiceToken = (transcriptionResult: TranscriptionResult): VoiceToken => {
+    const { task } = transcriptionResult;
+    
+    return {
+      type: task.type as VoiceToken['type'],
+      payload: task.payload || {},
+      message: `Processing ${task.type} command`
+    };
+  };
 
   const handleTranscription = async (result: TranscriptionResult) => {
     if (result.task.type === 'none' || !result.transcription.trim()) {

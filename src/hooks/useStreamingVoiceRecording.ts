@@ -45,7 +45,7 @@ export const useStreamingVoiceRecording = (onTranscription: (result: Transcripti
     if (chunksBufferRef.current.length === 0) return;
 
     // Create blob from accumulated chunks
-    const audioBlob = new Blob([...chunksBufferRef.current], { type: 'audio/webm' });
+    const audioBlob = new Blob([...chunksBufferRef.current], { type: 'audio/webm;codecs=opus' });
     chunksBufferRef.current = []; // Clear buffer
 
     // Process the audio chunk
@@ -58,12 +58,13 @@ export const useStreamingVoiceRecording = (onTranscription: (result: Transcripti
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          sampleRate: 44100
         } 
       });
 
       // Setup audio context for level monitoring
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new AudioContext();
       const source = audioContextRef.current.createMediaStreamSource(stream);
       analyserRef.current = audioContextRef.current.createAnalyser();
       analyserRef.current.fftSize = 256;
@@ -71,7 +72,7 @@ export const useStreamingVoiceRecording = (onTranscription: (result: Transcripti
 
       // Setup MediaRecorder for continuous recording
       mediaRecorderRef.current = new MediaRecorder(stream, {
-        mimeType: 'audio/webm'
+        mimeType: 'audio/webm;codecs=opus'
       });
       
       chunksBufferRef.current = [];

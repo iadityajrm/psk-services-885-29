@@ -17,7 +17,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-const createSystemInstruction = (context: string = '') => `You are a voice assistant that transcribes English audio and identifies user commands in real-time. 
+const createSystemInstruction = (context: string = '') => `You are a voice assistant that transcribes English audio and identifies user commands. 
 
 ${context ? `CONVERSATION CONTEXT: ${context}` : ''}
 
@@ -26,54 +26,67 @@ TRANSCRIPTION RULES:
 - If you hear non-English, translate it to English 
 - Only transcribe clear, intelligible speech with actual words
 - Do not transcribe background noise, music, unclear sounds, or ambient sounds
-- If the audio is unclear, just noise, or contains no clear speech, respond with an empty transcription
+- Do not transcribe random phrases like "I feel cold", "I feel hot" unless they are clearly and explicitly spoken by a user
+- If the audio is completely unclear, just noise, or contains no clear speech, respond with an empty transcription
+- Ignore mouth sounds, breathing, or non-verbal audio
 
 TASK IDENTIFICATION:
 Look for these command types in the transcription:
 
-1. OPENPAGE: Navigation to different UI pages
-   - Keywords: "go to", "open", "show", "navigate to", "switch to"
-   - Pages: "home", "restaurant", "apps", "menu"
-   - Examples: "go to restaurant", "open the menu", "show me apps", "I'm hungry" (implies restaurant)
-   - JSON: {"type": "openpage", "payload": {"page": "restaurant", "message": "Opening restaurant menu"}}
-
-2. OPENAPP: Opening applications/websites in new tab
+1. OPEN_APP: Opening applications/websites
    - Keywords: "open", "launch", "start", "show me"
-   - Apps: "Netflix", "YouTube", "Pluto TV", "YouTube Music", "Plex", "Disney+", "Hulu", "Prime Video", "HBO Max"
    - Examples: "open YouTube", "launch Netflix", "start Spotify"
-   - JSON: {"type": "openapp", "payload": {"app": "YouTube", "url": "https://www.youtube.com", "message": "Opening YouTube"}}
+   - JSON: {"type": "open_app", "payload": {"name": "YouTube"}}
 
-3. SERVICE_REQUEST: Food ordering and menu navigation
-   - Keywords: "order", "I want", "get me", "show menu", "what food", "I'm hungry"
-   - Examples: "show me the menu", "I want pasta", "order pizza", "I'm feeling hungry"
-   - JSON for menu: {"type": "service_request", "payload": {"request": "view_menu", "message": "Opening restaurant menu"}}
-   - JSON for food order: {"type": "service_request", "payload": {"request": "food_order", "name": "pasta", "quantity": "1"}}
-
-4. TIMER: Setting timers
-   - Keywords: "set timer", "timer for", "remind me"
+2. TIMER: Setting timers or alarms
+   - Keywords: "set timer", "timer for", "remind me", "alarm"
    - Examples: "set timer for 5 minutes", "timer for 30 seconds"
-   - JSON: {"type": "timer", "payload": {"duration": "5 minutes", "message": "Timer set for 5 minutes"}}
+   - JSON: {"type": "timer", "payload": {"duration": "5 minutes"}}
 
-5. ENVIRONMENT_CONTROL: Device control commands
-   - Keywords: "turn on/off", "set temperature", "dim lights"
+3. ENVIRONMENT_CONTROL: Room/device control (ONLY for explicit commands)
+   - Keywords: "turn on/off", "set temperature", "dim lights", "adjust"
    - Examples: "turn on the lights", "set temperature to 72"
-   - JSON: {"type": "environment_control", "payload": {"device": "lights", "action": "turn on", "message": "Turning on lights"}}
+   - JSON: {"type": "environment_control", "payload": {"device": "lights", "action": "turn on"}}
 
-6. NONE: No clear command detected
-   - For general conversation, unclear audio, or non-commands
+4. SERVICE_REQUEST: Information or service requests including food ordering and menu navigation
+   - Keywords: "what's", "show me", "find", "search for", "I want", "I'd like", "order", "get me", "go to", "switch to", "show"
+   - Menu requests: "show me the menu", "I'm hungry", "what food do you have"
+   - Category navigation: "go to appetizers", "show me desserts", "switch to main courses", "beverages section"
+   - Food ordering with quantities: "I want 2 pasta carbonara", "order 3 burgers", "get me the salmon"
+   - Food ordering with cooking instructions: "I want pasta carbonara well done", "medium rare steak", "extra spicy", "no onions"
+   - Multiple items: "I want pasta carbonara and tiramisu", "order 2 burgers and 3 fries", "get me salmon, pasta, and wine"
+   - Cooking instructions for previous items: "make it spicy", "well done", "no cheese", "extra sauce" (when context shows previous order)
+   - Examples: "what's the weather", "show me the menu", "I want pasta carbonara", "order 2 burgers and 3 fries", "go to desserts"
+   - JSON for menu: {"type": "service_request", "payload": {"request": "view_menu"}}
+   - JSON for category navigation: {"type": "service_request", "payload": {"request": "navigate_category", "category": "desserts"}}
+   - JSON for single food order: {"type": "service_request", "payload": {"request": "food_order", "name": "pasta carbonara", "quantity": "2", "special_instructions": "well done"}}
+   - JSON for multiple food orders: {"type": "service_request", "payload": {"request": "food_order", "items": [{"name": "pasta carbonara", "quantity": "1", "special_instructions": "spicy"}, {"name": "tiramisu", "quantity": "1"}]}}
+   - JSON for cooking instructions to previous order: {"type": "service_request", "payload": {"request": "modify_order", "special_instructions": "make it spicy"}}
+
+5. NONE: No clear command detected
+   - For general conversation, unclear audio, non-commands, or ambient sounds
    - JSON: {"type": "none"}
+
+IMPORTANT CONTEXT HANDLING:
+- If context shows a previous food order and user gives cooking instructions without mentioning a specific dish, treat it as a modification to the most recent order
+- Use context to understand references like "make it spicy" when a dish was previously mentioned
+- For category navigation, recognize food category names and navigation requests
 
 OUTPUT FORMAT (JSON only):
 {
   "transcription": "exact words heard",
   "task": {
-    "type": "openpage",
+    "type": "service_request",
     "payload": {
-      "page": "restaurant",
-      "message": "Opening restaurant menu"
+      "request": "food_order",
+      "name": "pasta carbonara",
+      "quantity": "2",
+      "special_instructions": "well done"
     }
   }
 }
+
+Be very strict: only identify clear, intentional commands. Casual conversation, ambient sounds, or unclear audio should be "none".
 
 Your entire response must be ONLY the JSON object and nothing else.`;
 
@@ -114,7 +127,7 @@ export class StreamingAudioProcessor {
       const base64Audio = await blobToBase64(audioBlob);
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash-exp",
+        model: "gemini-2.5-flash",
         contents: [{
           parts: [{
             inlineData: {
@@ -139,24 +152,23 @@ export class StreamingAudioProcessor {
                 properties: {
                   type: {
                     type: Type.STRING,
-                    description: "The category of the command (e.g., 'none', 'openapp', 'timer')."
+                    description: "The category of the command (e.g., 'none', 'open_app', 'timer')."
                   },
                   payload: {
                     type: Type.OBJECT,
                     description: "An object containing command-specific details.",
                     properties: {
                       name: { type: Type.STRING, description: "Name of the app to open or food item to order." },
-                      app: { type: Type.STRING, description: "Name of the app to open." },
-                      url: { type: Type.STRING, description: "URL for the app to open." },
-                      page: { type: Type.STRING, description: "Page to navigate to." },
                       duration: { type: Type.STRING, description: "Duration for a timer." },
                       device: { type: Type.STRING, description: "Device for environment control." },
                       action: { type: Type.STRING, description: "Action for environment control." },
+                      value: { type: Type.STRING, description: "Value for an action (e.g., scene name)." },
                       request: { type: Type.STRING, description: "The specific service request." },
+                      search_query: { type: Type.STRING, description: "Search query for content within apps." },
+                      query: { type: Type.STRING, description: "Alternative search query field." },
                       quantity: { type: Type.STRING, description: "Quantity of items to order (for food orders)." },
                       special_instructions: { type: Type.STRING, description: "Special cooking instructions for food items." },
-                      category: { type: Type.STRING, description: "Food category for navigation." },
-                      message: { type: Type.STRING, description: "User-friendly message to display." },
+                      category: { type: Type.STRING, description: "Food category for navigation (appetizers, main courses, desserts, beverages)." },
                       items: { 
                         type: Type.ARRAY,
                         description: "Array of multiple food items to order.",
