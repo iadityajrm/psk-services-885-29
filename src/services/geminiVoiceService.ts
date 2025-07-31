@@ -1,11 +1,24 @@
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI, Type } from "@google/genai";
 import type { TranscriptionResult, VoiceToken } from '../types/voice-tokens';
 
 // Using the provided API key (note: in production, this should be in Supabase secrets)
 const GEMINI_API_KEY = 'AIzaSyBOss0EVWeo49x_RKGOcgHGRILnhtZqR4o';
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64data = reader.result as string;
+      // remove the data url prefix
+      resolve(base64data.split(',')[1]);
+    };
+    reader.onerror = (error) => reject(error);
+    reader.readAsDataURL(blob);
+  });
+};
 
 const createSystemInstruction = (context: string = '') => `You are a voice assistant for a smart TV interface that transcribes English audio and identifies user commands. 
 
@@ -69,32 +82,83 @@ Your entire response must be ONLY the JSON object and nothing else.`;
 
 export const transcribeAndIdentifyTask = async (audioBlob: Blob, context: string = ''): Promise<TranscriptionResult> => {
   try {
-    // Convert blob to array buffer
-    const arrayBuffer = await audioBlob.arrayBuffer();
-    
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash-exp",
-      systemInstruction: createSystemInstruction(context)
+    const base64Audio = await blobToBase64(audioBlob);
+
+    const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash-exp",
+        contents: [{
+            parts: [{
+                inlineData: {
+                    mimeType: "audio/webm",
+                    data: base64Audio,
+                }
+            }]
+        }],
+        config: {
+            systemInstruction: createSystemInstruction(context),
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    transcription: {
+                        type: Type.STRING,
+                        description: "The English transcription of the audio."
+                    },
+                    task: {
+                        type: Type.OBJECT,
+                        description: "The identified command object.",
+                        properties: {
+                            type: {
+                                type: Type.STRING,
+                                description: "The category of the command (e.g., 'none', 'openapp', 'timer')."
+                            },
+                            payload: {
+                                type: Type.OBJECT,
+                                description: "An object containing command-specific details.",
+                                properties: {
+                                    name: { type: Type.STRING, description: "Name of the app to open or food item to order." },
+                                    app: { type: Type.STRING, description: "Name of the app to open." },
+                                    url: { type: Type.STRING, description: "URL for the app to open." },
+                                    page: { type: Type.STRING, description: "Page to navigate to." },
+                                    duration: { type: Type.STRING, description: "Duration for a timer." },
+                                    device: { type: Type.STRING, description: "Device for environment control." },
+                                    action: { type: Type.STRING, description: "Action for environment control." },
+                                    request: { type: Type.STRING, description: "The specific service request." },
+                                    quantity: { type: Type.STRING, description: "Quantity of items to order (for food orders)." },
+                                    special_instructions: { type: Type.STRING, description: "Special cooking instructions for food items." },
+                                    category: { type: Type.STRING, description: "Food category for navigation." },
+                                    message: { type: Type.STRING, description: "User-friendly message to display." },
+                                    items: { 
+                                      type: Type.ARRAY,
+                                      description: "Array of multiple food items to order.",
+                                      items: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                          name: { type: Type.STRING, description: "Name of the food item." },
+                                          quantity: { type: Type.STRING, description: "Quantity of this item." },
+                                          special_instructions: { type: Type.STRING, description: "Special instructions for this item." }
+                                        }
+                                      }
+                                    }
+                                }
+                            }
+                        },
+                        required: ["type"]
+                    }
+                },
+                required: ["transcription", "task"]
+            },
+        },
     });
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          data: Buffer.from(arrayBuffer).toString('base64'),
-          mimeType: 'audio/webm'
-        }
-      }
-    ]);
-
-    const response = await result.response;
-    const jsonText = response.text().trim();
-    const parsedResult = JSON.parse(jsonText) as TranscriptionResult;
+    const jsonText = response.text.trim();
+    const result = JSON.parse(jsonText) as TranscriptionResult;
     
-    if (!parsedResult || typeof parsedResult.transcription !== 'string' || typeof parsedResult.task?.type !== 'string') {
+    if (!result || typeof result.transcription !== 'string' || typeof result.task?.type !== 'string') {
       throw new Error('Invalid JSON response format from API.');
     }
     
-    return parsedResult;
+    return result;
 
   } catch (error) {
     console.error("Error calling Gemini API:", error);
