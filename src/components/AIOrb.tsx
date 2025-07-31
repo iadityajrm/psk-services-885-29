@@ -1,10 +1,11 @@
 
 import React, { useState } from 'react';
 import { Mic, MicOff } from 'lucide-react';
-import { useVoiceRecording } from '@/hooks/useVoiceRecording';
-import { transcribeAndIdentifyTask, processVoiceToken } from '@/services/geminiVoiceService';
+import { useStreamingVoiceRecording } from '@/hooks/useStreamingVoiceRecording';
+import { processVoiceToken } from '@/services/geminiVoiceService';
 import { useTokenProcessor } from '@/services/tokenProcessor';
 import { toast } from 'sonner';
+import type { TranscriptionResult } from '@/types/voice-tokens';
 
 interface AIOrbProps {
   focused?: boolean;
@@ -13,44 +14,46 @@ interface AIOrbProps {
 
 const AIOrb: React.FC<AIOrbProps> = ({ focused = false, onClick }) => {
   const [isProcessing, setIsProcessing] = useState(false);
-  const { isRecording, startRecording, stopRecording, audioLevel } = useVoiceRecording();
   const { processToken } = useTokenProcessor();
+
+  const handleTranscription = async (result: TranscriptionResult) => {
+    if (result.task.type === 'none' || !result.transcription.trim()) {
+      return; // Ignore empty or non-command transcriptions
+    }
+
+    setIsProcessing(true);
+    try {
+      console.log('Transcription result:', result);
+      
+      if (result.transcription) {
+        toast.info(`You said: "${result.transcription}"`);
+      }
+      
+      const token = processVoiceToken(result);
+      await processToken(token);
+    } catch (error) {
+      console.error('Error processing voice command:', error);
+      toast.error('Failed to process voice command. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const { isRecording, startStreaming, stopStreaming, audioLevel } = useStreamingVoiceRecording(handleTranscription);
 
   const handleClick = async () => {
     onClick?.();
 
     if (isRecording) {
-      // Stop recording and process
-      setIsProcessing(true);
-      try {
-        const audioBlob = await stopRecording();
-        if (audioBlob) {
-          toast.info('Processing your command...');
-          
-          const transcriptionResult = await transcribeAndIdentifyTask(audioBlob);
-          console.log('Transcription result:', transcriptionResult);
-          
-          if (transcriptionResult.transcription) {
-            toast.info(`You said: "${transcriptionResult.transcription}"`);
-          }
-          
-          const token = processVoiceToken(transcriptionResult);
-          await processToken(token);
-        }
-      } catch (error) {
-        console.error('Error processing voice command:', error);
-        toast.error('Failed to process voice command. Please try again.');
-      } finally {
-        setIsProcessing(false);
-      }
+      // Stop streaming
+      stopStreaming();
     } else {
-      // Start recording
+      // Start streaming
       try {
-        await startRecording();
-        toast.info('Listening... Click again to stop.');
+        await startStreaming();
       } catch (error) {
-        console.error('Error starting recording:', error);
-        toast.error('Could not start voice recording.');
+        console.error('Error starting streaming:', error);
+        toast.error('Could not start voice streaming.');
       }
     }
   };
