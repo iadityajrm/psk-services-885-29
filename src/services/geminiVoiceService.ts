@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { TranscriptionResult, VoiceToken } from '../types/voice-tokens';
 
@@ -174,22 +173,16 @@ export const processVoiceToken = (transcriptionResult: TranscriptionResult): Voi
   
   switch (task.type) {
     case 'openpage':
-      return {
-        type: 'openpage',
-        payload: {
-          page: task.payload?.page || 'home'
-        },
-        message: task.payload?.message || `Opening ${task.payload?.page} page`
-      };
-    
     case 'openapp':
+    case 'open_app':
       return {
-        type: 'openapp',
+        type: 'open_app',
         payload: {
+          page: task.payload?.page || 'home',
           app: task.payload?.app || task.payload?.name,
           url: getAppUrl(task.payload?.app || task.payload?.name)
         },
-        message: task.payload?.message || `Opening ${task.payload?.app || task.payload?.name}`
+        message: task.payload?.message || `Opening ${task.payload?.app || task.payload?.name || task.payload?.page}`
       };
     
     case 'service_request':
