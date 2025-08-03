@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, LiveServerMessage, Modality, Session, Type } from '@google/genai';
 import { createBlob, decode, decodeAudioData } from '../utils/geminiUtils';
 
@@ -13,6 +12,61 @@ const functionDeclarations = [
       type: Type.OBJECT,
       properties: {},
       required: []
+    }
+  },
+  {
+    name: "open_netflix",
+    description: "Opens Netflix in a new browser tab", 
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "open_plex",
+    description: "Opens Plex TV in a new browser tab",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "open_youtube_music",
+    description: "Opens YouTube Music in a new browser tab",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "search_youtube",
+    description: "Search for videos on YouTube and open the results",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description: "The search query for YouTube"
+        }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "play_youtube_video",
+    description: "Search and play a specific video on YouTube",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description: "The search query to find and play the video"
+        }
+      },
+      required: ["query"]
     }
   }
 ];
@@ -135,10 +189,9 @@ export class GeminiLiveAudioService {
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Orus' } },
           },
           tools: [{ functionDeclarations }],
-          // Note: No systemInstruction when using function calling
         },
       });
 
@@ -151,23 +204,50 @@ export class GeminiLiveAudioService {
   private async handleFunctionCall(toolCall: any): Promise<void> {
     console.log('Processing function call:', toolCall);
     
-    const functionName = toolCall.functionCalls?.[0]?.name;
+    const functionCall = toolCall.functionCalls?.[0];
+    if (!functionCall) {
+      console.error('No function call found in toolCall');
+      return;
+    }
+
+    const functionName = functionCall.name;
+    const functionId = functionCall.id;
+    const args = functionCall.args || {};
     
+    let result = { success: true, message: '' };
+
     switch (functionName) {
       case 'open_youtube':
-        this.openYouTube();
+        result = this.openYouTube();
+        break;
+      case 'open_netflix':
+        result = this.openNetflix();
+        break;
+      case 'open_plex':
+        result = this.openPlex();
+        break;
+      case 'open_youtube_music':
+        result = this.openYouTubeMusic();
+        break;
+      case 'search_youtube':
+        result = this.searchYouTube(args.query);
+        break;
+      case 'play_youtube_video':
+        result = this.playYouTubeVideo(args.query);
         break;
       default:
         console.log('Unknown function call:', functionName);
+        result = { success: false, message: 'Unknown function' };
     }
 
-    // Send function response back to Gemini
-    if (this.session) {
+    // Send function response back to Gemini with the correct ID
+    if (this.session && functionId) {
       try {
         this.session.sendToolResponse({
           functionResponses: [{
+            id: functionId,
             name: functionName,
-            response: { success: true }
+            response: result
           }]
         });
       } catch (error) {
@@ -176,13 +256,74 @@ export class GeminiLiveAudioService {
     }
   }
 
-  private openYouTube(): void {
+  private openYouTube(): { success: boolean; message: string } {
     console.log('Opening YouTube in new tab');
     window.open('https://www.youtube.com', '_blank');
     
     if (this.onResponseCallback) {
       this.onResponseCallback('Opening YouTube for you!');
     }
+    
+    return { success: true, message: 'YouTube opened successfully' };
+  }
+
+  private openNetflix(): { success: boolean; message: string } {
+    console.log('Opening Netflix in new tab');
+    window.open('https://www.netflix.com', '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback('Opening Netflix for you!');
+    }
+    
+    return { success: true, message: 'Netflix opened successfully' };
+  }
+
+  private openPlex(): { success: boolean; message: string } {
+    console.log('Opening Plex TV in new tab');
+    window.open('https://app.plex.tv', '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback('Opening Plex TV for you!');
+    }
+    
+    return { success: true, message: 'Plex TV opened successfully' };
+  }
+
+  private openYouTubeMusic(): { success: boolean; message: string } {
+    console.log('Opening YouTube Music in new tab');
+    window.open('https://music.youtube.com', '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback('Opening YouTube Music for you!');
+    }
+    
+    return { success: true, message: 'YouTube Music opened successfully' };
+  }
+
+  private searchYouTube(query: string): { success: boolean; message: string } {
+    console.log('Searching YouTube for:', query);
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    window.open(searchUrl, '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback(`Searching YouTube for "${query}"!`);
+    }
+    
+    return { success: true, message: `YouTube search for "${query}" opened successfully` };
+  }
+
+  private playYouTubeVideo(query: string): { success: boolean; message: string } {
+    console.log('Playing YouTube video for:', query);
+    // For playing a video, we'll search and let the user click the first result
+    // In a real implementation, you might use YouTube API to get the first video ID
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    window.open(searchUrl, '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback(`Finding and playing "${query}" on YouTube!`);
+    }
+    
+    return { success: true, message: `YouTube video search for "${query}" opened successfully` };
   }
 
   private async setupAudioInput(): Promise<void> {
