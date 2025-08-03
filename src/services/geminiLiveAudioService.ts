@@ -1,4 +1,5 @@
-import { GoogleGenAI, LiveServerMessage, Modality, Session } from '@google/genai';
+
+import { GoogleGenAI, LiveServerMessage, Modality, Session, Type } from '@google/genai';
 import { createBlob, decode, decodeAudioData } from '../utils/geminiUtils';
 
 const GEMINI_API_KEY = 'AIzaSyDC1k_PYaCIy987c-OSfFIu6D5WPFrPa9U';
@@ -9,7 +10,7 @@ const functionDeclarations = [
     name: "open_youtube",
     description: "Opens YouTube in a new browser tab",
     parameters: {
-      type: "object",
+      type: Type.OBJECT,
       properties: {},
       required: []
     }
