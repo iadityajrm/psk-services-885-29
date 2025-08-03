@@ -1,8 +1,20 @@
-
 import { GoogleGenAI, LiveServerMessage, Modality, Session } from '@google/genai';
 import { createBlob, decode, decodeAudioData } from '../utils/geminiUtils';
 
 const GEMINI_API_KEY = 'AIzaSyDC1k_PYaCIy987c-OSfFIu6D5WPFrPa9U';
+
+// Function declarations for Gemini Live
+const functionDeclarations = [
+  {
+    name: "open_youtube",
+    description: "Opens YouTube in a new browser tab",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  }
+];
 
 export class GeminiLiveAudioService {
   private client: GoogleGenAI;
@@ -62,6 +74,13 @@ export class GeminiLiveAudioService {
           onmessage: async (message: LiveServerMessage) => {
             console.log('Received message from Gemini:', message);
             
+            // Handle function calls
+            if (message.toolCall) {
+              console.log('Function call received:', message.toolCall);
+              await this.handleFunctionCall(message.toolCall);
+              return;
+            }
+
             // Handle audio response
             const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
             if (audio && this.outputAudioContext) {
@@ -117,21 +136,51 @@ export class GeminiLiveAudioService {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
           },
-          systemInstruction: `You are a helpful voice assistant. Respond naturally and conversationally to voice input. Keep responses concise but friendly. You can help with:
-          - Opening applications and websites
-          - Setting timers and reminders  
-          - Controlling smart home devices
-          - Answering questions
-          - Food ordering and menu navigation
-          - General conversation
-          
-          Always acknowledge what the user said and provide helpful responses.`,
+          tools: [{ functionDeclarations }],
+          // Note: No systemInstruction when using function calling
         },
       });
 
     } catch (error) {
       console.error('Failed to connect to Gemini Live:', error);
       throw new Error('Could not establish connection to Gemini Live');
+    }
+  }
+
+  private async handleFunctionCall(toolCall: any): Promise<void> {
+    console.log('Processing function call:', toolCall);
+    
+    const functionName = toolCall.functionCalls?.[0]?.name;
+    
+    switch (functionName) {
+      case 'open_youtube':
+        this.openYouTube();
+        break;
+      default:
+        console.log('Unknown function call:', functionName);
+    }
+
+    // Send function response back to Gemini
+    if (this.session) {
+      try {
+        this.session.sendToolResponse({
+          functionResponses: [{
+            name: functionName,
+            response: { success: true }
+          }]
+        });
+      } catch (error) {
+        console.error('Error sending tool response:', error);
+      }
+    }
+  }
+
+  private openYouTube(): void {
+    console.log('Opening YouTube in new tab');
+    window.open('https://www.youtube.com', '_blank');
+    
+    if (this.onResponseCallback) {
+      this.onResponseCallback('Opening YouTube for you!');
     }
   }
 
