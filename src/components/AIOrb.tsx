@@ -1,10 +1,7 @@
 
 import React, { useState } from 'react';
-import { Mic } from 'lucide-react';
-import { useStreamingVoiceRecording } from '@/hooks/useStreamingVoiceRecording';
-import { useTokenProcessor } from '@/services/tokenProcessor';
-import { toast } from 'sonner';
-import type { TranscriptionResult, VoiceToken } from '@/types/voice-tokens';
+import { Mic, MicOff, Volume2 } from 'lucide-react';
+import { useGeminiLiveAudio } from '@/hooks/useGeminiLiveAudio';
 
 interface AIOrbProps {
   focused?: boolean;
@@ -12,121 +9,70 @@ interface AIOrbProps {
 }
 
 const AIOrb: React.FC<AIOrbProps> = ({ focused = false, onClick }) => {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const { processToken } = useTokenProcessor();
-
-  const processVoiceToken = (transcriptionResult: TranscriptionResult): VoiceToken => {
-    const { task } = transcriptionResult;
-    
-    // Map the task type to the correct VoiceToken type
-    let tokenType: VoiceToken['type'] = 'none';
-    
-    switch (task.type) {
-      case 'openpage':
-      case 'openapp':
-      case 'open_app':
-        tokenType = 'open_app';
-        break;
-      case 'timer':
-        tokenType = 'timer';
-        break;
-      case 'environment_control':
-        tokenType = 'environment_control';
-        break;
-      case 'service_request':
-        tokenType = 'service_request';
-        break;
-      default:
-        tokenType = 'none';
-    }
-    
-    return {
-      type: tokenType,
-      payload: task.payload || {},
-      message: `Processing ${tokenType} command`
-    };
-  };
-
-  const handleTranscription = async (result: TranscriptionResult) => {
-    if (result.task.type === 'none' || !result.transcription.trim()) {
-      return; // Ignore empty or non-command transcriptions
-    }
-
-    setIsProcessing(true);
-    try {
-      console.log('Transcription result:', result);
-      
-      if (result.transcription) {
-        toast.info(`You said: "${result.transcription}"`);
-      }
-      
-      const token = processVoiceToken(result);
-      await processToken(token);
-    } catch (error) {
-      console.error('Error processing voice command:', error);
-      toast.error('Failed to process voice command. Please try again.');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const { isRecording, startStreaming, stopStreaming, audioLevel } = useStreamingVoiceRecording(handleTranscription);
+  const { 
+    isConnected, 
+    isMuted, 
+    toggleMute, 
+    connect, 
+    disconnect, 
+    audioLevel 
+  } = useGeminiLiveAudio();
 
   const handleClick = async () => {
     onClick?.();
 
-    if (isRecording) {
-      // Stop streaming
-      stopStreaming();
+    if (!isConnected) {
+      // First click - establish connection
+      await connect();
     } else {
-      // Start streaming
-      try {
-        await startStreaming();
-      } catch (error) {
-        console.error('Error starting streaming:', error);
-        toast.error('Could not start voice streaming.');
-      }
+      // Subsequent clicks - toggle mute
+      await toggleMute();
     }
   };
 
   const getOrbState = () => {
-    if (isProcessing) return 'processing';
-    if (isRecording) return 'recording';
-    return 'idle';
+    if (!isConnected) return 'idle';
+    if (isMuted) return 'muted';
+    return 'active';
   };
 
   const orbState = getOrbState();
+
+  const getIcon = () => {
+    if (!isConnected) {
+      return <Mic size={20} className="text-white" />;
+    }
+    if (isMuted) {
+      return <MicOff size={20} className="text-white" />;
+    }
+    return <Volume2 size={20} className="text-white" />;
+  };
 
   return (
     <button
       id="ai-orb-button"
       onClick={handleClick}
-      disabled={isProcessing}
       className={`relative w-12 h-12 rounded-full transition-all duration-300 cursor-pointer group ${
         focused ? 'ring-2 ring-white' : ''
       } ${
-        orbState === 'recording'
-          ? 'bg-gradient-to-r from-red-500 to-red-600 scale-110 shadow-lg shadow-red-500/50' 
-          : orbState === 'processing'
-          ? 'bg-gradient-to-r from-blue-500 to-purple-600 scale-110 shadow-lg shadow-blue-500/50'
+        orbState === 'active'
+          ? 'bg-gradient-to-r from-green-500 to-green-600 scale-110 shadow-lg shadow-green-500/50' 
+          : orbState === 'muted'
+          ? 'bg-gradient-to-r from-yellow-500 to-orange-600 scale-110 shadow-lg shadow-yellow-500/50'
           : 'bg-gradient-to-r from-gray-600 to-gray-700 hover:from-psyco-green-DEFAULT/80 hover:to-blue-500/80'
       }`}
     >
       {/* Pulsing rings when active */}
-      {(orbState === 'recording' || orbState === 'processing') && (
+      {orbState === 'active' && (
         <>
-          <div className={`absolute inset-0 rounded-full animate-ping ${
-            orbState === 'recording' ? 'bg-red-500/30' : 'bg-blue-500/30'
-          }`} />
-          <div className={`absolute inset-0 rounded-full animate-ping animation-delay-200 ${
-            orbState === 'recording' ? 'bg-red-500/20' : 'bg-blue-500/20'
-          }`} />
+          <div className="absolute inset-0 rounded-full animate-ping bg-green-500/30" />
+          <div className="absolute inset-0 rounded-full animate-ping animation-delay-200 bg-green-500/20" />
         </>
       )}
       
       {/* Content */}
       <div className="absolute inset-0 flex items-center justify-center">
-        {orbState === 'recording' ? (
+        {orbState === 'active' ? (
           <div className="flex items-center space-x-0.5">
             {[...Array(5)].map((_, i) => (
               <div 
@@ -139,10 +85,8 @@ const AIOrb: React.FC<AIOrbProps> = ({ focused = false, onClick }) => {
               />
             ))}
           </div>
-        ) : orbState === 'processing' ? (
-          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
         ) : (
-          <Mic size={20} className="text-white" />
+          getIcon()
         )}
       </div>
       
