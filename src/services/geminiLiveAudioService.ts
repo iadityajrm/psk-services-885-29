@@ -1,15 +1,30 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, Session } from '@google/genai';
+import { createBlob, decode, decodeAudioData } from '../utils/geminiUtils';
 
 const GEMINI_API_KEY = 'AIzaSyDC1k_PYaCIy987c-OSfFIu6D5WPFrPa9U';
 
 export class GeminiLiveAudioService {
-  private ws: WebSocket | null = null;
+  private client: GoogleGenAI;
+  private session: Session | null = null;
+  private inputAudioContext: AudioContext | null = null;
+  private outputAudioContext: AudioContext | null = null;
+  private inputNode: GainNode | null = null;
+  private outputNode: GainNode | null = null;
+  private nextStartTime = 0;
+  private mediaStream: MediaStream | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private audioWorkletNode: AudioWorkletNode | null = null;
+  private sources = new Set<AudioBufferSourceNode>();
   private isConnected = false;
   private isMuted = false;
-  private mediaRecorder: MediaRecorder | null = null;
-  private audioStream: MediaStream | null = null;
   private onResponseCallback?: (text: string) => void;
+
+  constructor() {
+    this.client = new GoogleGenAI({
+      apiKey: GEMINI_API_KEY,
+    });
+  }
 
   async connect(onResponse?: (text: string) => void): Promise<void> {
     if (this.isConnected) {
@@ -20,75 +35,99 @@ export class GeminiLiveAudioService {
     this.onResponseCallback = onResponse;
 
     try {
-      // Connect to Gemini Live WebSocket endpoint
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
-      
-      this.ws = new WebSocket(wsUrl);
-      
-      this.ws.onopen = async () => {
-        console.log('Connected to Gemini Live WebSocket');
-        this.isConnected = true;
-        
-        // Send initial setup message
-        const setupMessage = {
-          setup: {
-            model: "models/gemini-2.0-flash-exp",
-            generation_config: {
-              response_modalities: ["AUDIO"],
-              speech_config: {
-                voice_config: {
-                  prebuilt_voice_config: {
-                    voice_name: "Puck"
-                  }
-                }
-              }
-            },
-            system_instruction: {
-              parts: [{
-                text: `You are a helpful voice assistant. Respond naturally and conversationally to voice input. Keep responses concise but friendly. You can help with:
-                - Opening applications and websites
-                - Setting timers and reminders  
-                - Controlling smart home devices
-                - Answering questions
-                - Food ordering and menu navigation
-                - General conversation
-                
-                Always acknowledge what the user said and provide helpful responses.`
-              }]
-            },
-            tools: []
-          }
-        };
-        
-        this.ws?.send(JSON.stringify(setupMessage));
-        await this.setupAudioInput();
-      };
+      // Initialize audio contexts
+      this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000,
+      });
+      this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 24000,
+      });
+      this.inputNode = this.inputAudioContext.createGain();
+      this.outputNode = this.outputAudioContext.createGain();
+      this.outputNode.connect(this.outputAudioContext.destination);
 
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('Received from Gemini:', data);
-          
-          if (data.serverContent?.modelTurn?.parts) {
-            const parts = data.serverContent.modelTurn.parts;
-            const textPart = parts.find((part: any) => part.text);
+      await this.inputAudioContext.resume();
+      await this.outputAudioContext.resume();
+
+      const model = 'gemini-2.0-flash-exp';
+
+      this.session = await this.client.live.connect({
+        model: model,
+        callbacks: {
+          onopen: () => {
+            console.log('Connected to Gemini Live');
+            this.isConnected = true;
+            this.setupAudioInput();
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            console.log('Received message from Gemini:', message);
+            
+            // Handle audio response
+            const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData;
+            if (audio && this.outputAudioContext) {
+              this.nextStartTime = Math.max(
+                this.nextStartTime,
+                this.outputAudioContext.currentTime,
+              );
+
+              const audioBuffer = await decodeAudioData(
+                decode(audio.data),
+                this.outputAudioContext,
+                24000,
+                1,
+              );
+              const source = this.outputAudioContext.createBufferSource();
+              source.buffer = audioBuffer;
+              source.connect(this.outputNode!);
+              source.addEventListener('ended', () => {
+                this.sources.delete(source);
+              });
+
+              source.start(this.nextStartTime);
+              this.nextStartTime = this.nextStartTime + audioBuffer.duration;
+              this.sources.add(source);
+            }
+
+            // Handle text response
+            const textPart = message.serverContent?.modelTurn?.parts?.find((part: any) => part.text);
             if (textPart && this.onResponseCallback) {
               this.onResponseCallback(textPart.text);
             }
-          }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
-        }
-      };
 
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
-
-      this.ws.onclose = () => {
-        console.log('WebSocket connection closed');
-        this.isConnected = false;
-      };
+            // Handle interruption
+            const interrupted = message.serverContent?.interrupted;
+            if (interrupted) {
+              for (const source of this.sources.values()) {
+                source.stop();
+                this.sources.delete(source);
+              }
+              this.nextStartTime = 0;
+            }
+          },
+          onerror: (error: ErrorEvent) => {
+            console.error('Gemini Live error:', error);
+          },
+          onclose: (event: CloseEvent) => {
+            console.log('Gemini Live connection closed:', event.reason);
+            this.isConnected = false;
+          },
+        },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+          },
+          systemInstruction: `You are a helpful voice assistant. Respond naturally and conversationally to voice input. Keep responses concise but friendly. You can help with:
+          - Opening applications and websites
+          - Setting timers and reminders  
+          - Controlling smart home devices
+          - Answering questions
+          - Food ordering and menu navigation
+          - General conversation
+          
+          Always acknowledge what the user said and provide helpful responses.`,
+        },
+      });
 
     } catch (error) {
       console.error('Failed to connect to Gemini Live:', error);
@@ -97,54 +136,56 @@ export class GeminiLiveAudioService {
   }
 
   private async setupAudioInput(): Promise<void> {
+    if (!this.inputAudioContext) return;
+
     try {
-      this.audioStream = await navigator.mediaDevices.getUserMedia({ 
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 16000
-        }
+          sampleRate: 16000,
+        },
       });
 
-      this.mediaRecorder = new MediaRecorder(this.audioStream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
+      this.sourceNode = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
+      this.sourceNode.connect(this.inputNode!);
 
-      this.mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0 && this.ws && !this.isMuted && this.ws.readyState === WebSocket.OPEN) {
-          await this.sendAudioChunk(event.data);
-        }
-      };
+      // Load AudioWorklet processor or use fallback
+      try {
+        await this.inputAudioContext.audioWorklet.addModule('/audio-processor.js');
+        this.audioWorkletNode = new AudioWorkletNode(this.inputAudioContext, 'audio-processor');
+        
+        this.audioWorkletNode.port.onmessage = (event) => {
+          if (this.isMuted || !this.session) return;
+          
+          const pcmData = event.data;
+          this.session.sendRealtimeInput({ media: createBlob(pcmData) });
+        };
 
-      // Start continuous recording with small chunks
-      this.mediaRecorder.start(100); // 100ms chunks
+        this.sourceNode.connect(this.audioWorkletNode);
+        this.audioWorkletNode.connect(this.inputAudioContext.destination);
+      } catch (error) {
+        console.warn('AudioWorklet not supported, using fallback');
+        // Fallback for older browsers
+        const bufferSize = 256;
+        const scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
+        
+        scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+          if (this.isMuted || !this.session) return;
+          const inputBuffer = audioProcessingEvent.inputBuffer;
+          const pcmData = inputBuffer.getChannelData(0);
+          this.session.sendRealtimeInput({ media: createBlob(pcmData) });
+        };
 
+        this.sourceNode.connect(scriptProcessor);
+        scriptProcessor.connect(this.inputAudioContext.destination);
+      }
+
+      console.log('Audio input setup complete');
     } catch (error) {
       console.error('Error setting up audio input:', error);
       throw error;
-    }
-  }
-
-  private async sendAudioChunk(audioBlob: Blob): Promise<void> {
-    if (!this.ws || this.isMuted || this.ws.readyState !== WebSocket.OPEN) return;
-
-    try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-      
-      const message = {
-        realtimeInput: {
-          mediaChunks: [{
-            mimeType: "audio/webm;codecs=opus",
-            data: base64Audio
-          }]
-        }
-      };
-      
-      this.ws.send(JSON.stringify(message));
-    } catch (error) {
-      console.error('Error sending audio chunk:', error);
     }
   }
 
@@ -162,26 +203,46 @@ export class GeminiLiveAudioService {
     if (!this.isConnected) return;
 
     try {
-      // Stop media recorder
-      if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-        this.mediaRecorder.stop();
-      }
-
       // Stop audio stream
-      if (this.audioStream) {
-        this.audioStream.getTracks().forEach(track => track.stop());
-        this.audioStream = null;
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+        this.mediaStream = null;
       }
 
-      // Close WebSocket
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
+      // Disconnect audio nodes
+      if (this.audioWorkletNode && this.sourceNode) {
+        this.audioWorkletNode.disconnect();
+        this.sourceNode.disconnect();
+      }
+
+      // Stop all audio sources
+      for (const source of this.sources.values()) {
+        source.stop();
+        this.sources.delete(source);
+      }
+
+      // Close session
+      if (this.session) {
+        this.session.close();
+        this.session = null;
+      }
+
+      // Close audio contexts
+      if (this.inputAudioContext) {
+        await this.inputAudioContext.close();
+        this.inputAudioContext = null;
+      }
+      if (this.outputAudioContext) {
+        await this.outputAudioContext.close();
+        this.outputAudioContext = null;
       }
 
       this.isConnected = false;
       this.isMuted = false;
-      this.mediaRecorder = null;
+      this.audioWorkletNode = null;
+      this.sourceNode = null;
+      this.inputNode = null;
+      this.outputNode = null;
       this.onResponseCallback = undefined;
 
       console.log('Disconnected from Gemini Live');
